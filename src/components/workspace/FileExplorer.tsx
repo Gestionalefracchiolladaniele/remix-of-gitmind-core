@@ -1,17 +1,87 @@
-import { useState } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, Search } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ChevronRight, ChevronDown, File, Folder, Search, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { MOCK_FILE_TREE } from '@/lib/mock-data';
-import type { FileNode } from '@/lib/types';
+import { api } from '@/lib/api';
+import type { FileNode, Repository } from '@/lib/types';
 
 interface FileExplorerProps {
   onFileSelect: (path: string) => void;
   selectedFile: string | null;
+  userId?: string;
+  repo?: Repository | null;
 }
 
-const FileExplorer = ({ onFileSelect, selectedFile }: FileExplorerProps) => {
+function buildTree(files: { path: string; size: number; sha: string }[]): FileNode[] {
+  const root: FileNode[] = [];
+  const map = new Map<string, FileNode>();
+
+  for (const file of files) {
+    const parts = file.path.split('/');
+    let currentPath = '';
+
+    for (let i = 0; i < parts.length; i++) {
+      const name = parts[i];
+      const parentPath = currentPath;
+      currentPath = currentPath ? `${currentPath}/${name}` : name;
+      const isFile = i === parts.length - 1;
+
+      if (!map.has(currentPath)) {
+        const ext = name.split('.').pop() || '';
+        const langMap: Record<string, string> = { ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', json: 'json', md: 'md', css: 'css', html: 'html', py: 'py' };
+        const node: FileNode = {
+          name,
+          path: currentPath,
+          type: isFile ? 'file' : 'folder',
+          children: isFile ? undefined : [],
+          language: isFile ? langMap[ext] : undefined,
+          sha: isFile ? file.sha : undefined,
+          size: isFile ? file.size : undefined,
+        };
+        map.set(currentPath, node);
+
+        if (parentPath && map.has(parentPath)) {
+          map.get(parentPath)!.children!.push(node);
+        } else if (!parentPath) {
+          root.push(node);
+        }
+      }
+    }
+  }
+
+  return root;
+}
+
+const FileExplorer = ({ onFileSelect, selectedFile, userId, repo }: FileExplorerProps) => {
   const [search, setSearch] = useState('');
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/src', '/src/components', '/src/lib']));
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [tree, setTree] = useState<FileNode[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (userId && repo) {
+      loadTree();
+    }
+  }, [userId, repo]);
+
+  const loadTree = async () => {
+    if (!userId || !repo) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { files } = await api.fetchTree(userId, repo.owner, repo.name, repo.default_branch, repo.base_path || undefined);
+      const built = buildTree(files);
+      setTree(built);
+      // Auto-expand first level
+      const firstLevel = new Set(built.filter(n => n.type === 'folder').map(n => n.path));
+      setExpandedFolders(firstLevel);
+    } catch (e: any) {
+      setError(e.message);
+      console.error('Failed to load file tree:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleFolder = (path: string) => {
     setExpandedFolders(prev => {
@@ -35,7 +105,7 @@ const FileExplorer = ({ onFileSelect, selectedFile }: FileExplorerProps) => {
     }, []);
   };
 
-  const tree = filterTree(MOCK_FILE_TREE, search);
+  const filteredTree = filterTree(tree, search);
 
   return (
     <div className="flex h-full flex-col bg-card">
@@ -51,46 +121,45 @@ const FileExplorer = ({ onFileSelect, selectedFile }: FileExplorerProps) => {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
-        {tree.map(node => (
-          <TreeNode
-            key={node.path}
-            node={node}
-            depth={0}
-            expanded={expandedFolders}
-            onToggle={toggleFolder}
-            onSelect={onFileSelect}
-            selectedFile={selectedFile}
-          />
-        ))}
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="p-3 text-xs text-destructive">{error}</div>
+        ) : filteredTree.length === 0 ? (
+          <div className="p-3 text-xs text-muted-foreground">No files found</div>
+        ) : (
+          filteredTree.map(node => (
+            <TreeNode
+              key={node.path}
+              node={node}
+              depth={0}
+              expanded={expandedFolders}
+              onToggle={toggleFolder}
+              onSelect={onFileSelect}
+              selectedFile={selectedFile}
+            />
+          ))
+        )}
       </div>
     </div>
   );
 };
 
 const TreeNode = ({
-  node,
-  depth,
-  expanded,
-  onToggle,
-  onSelect,
-  selectedFile,
+  node, depth, expanded, onToggle, onSelect, selectedFile,
 }: {
-  node: FileNode;
-  depth: number;
-  expanded: Set<string>;
-  onToggle: (path: string) => void;
-  onSelect: (path: string) => void;
-  selectedFile: string | null;
+  node: FileNode; depth: number; expanded: Set<string>;
+  onToggle: (path: string) => void; onSelect: (path: string) => void; selectedFile: string | null;
 }) => {
   const isExpanded = expanded.has(node.path);
   const isSelected = node.path === selectedFile;
   const isFolder = node.type === 'folder';
 
   const langColor: Record<string, string> = {
-    tsx: 'text-blue-400',
-    ts: 'text-blue-300',
-    json: 'text-yellow-400',
-    md: 'text-muted-foreground',
+    tsx: 'text-blue-400', ts: 'text-blue-300', json: 'text-yellow-400', md: 'text-muted-foreground',
+    js: 'text-yellow-300', jsx: 'text-blue-400', css: 'text-pink-400', py: 'text-green-400',
   };
 
   return (

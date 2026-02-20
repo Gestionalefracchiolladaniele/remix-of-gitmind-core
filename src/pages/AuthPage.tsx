@@ -1,18 +1,30 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { GitBranch, Zap, Shield, ArrowRight } from 'lucide-react';
+import { GitBranch, Zap, Shield, ArrowRight, Github } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/lib/auth';
 
 const AuthPage = () => {
   const navigate = useNavigate();
+  const { user, login, isLoading: authLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSimulatedLogin = () => {
+  // If already logged in, redirect
+  if (user) {
+    navigate('/dashboard');
+    return null;
+  }
+
+  const handleLogin = async () => {
     setIsLoading(true);
-    setTimeout(() => {
-      localStorage.setItem('gitmind_user', JSON.stringify({ id: 'user-1', name: 'Developer' }));
-      navigate('/dashboard');
-    }, 800);
+    try {
+      await login();
+      // If simulated login (no GitHub OAuth), navigate immediately
+      // Real OAuth will redirect to GitHub
+      setTimeout(() => navigate('/dashboard'), 500);
+    } catch {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -39,26 +51,26 @@ const AuthPage = () => {
           <div className="space-y-4">
             <Feature icon={Zap} text="AI-powered code orchestration" />
             <Feature icon={Shield} text="Deterministic intent classification" />
-            <Feature icon={GitBranch} text="Simulated commit engine" />
+            <Feature icon={GitBranch} text="Real GitHub commit engine" />
           </div>
 
           <Button
-            onClick={handleSimulatedLogin}
-            disabled={isLoading}
+            onClick={handleLogin}
+            disabled={isLoading || authLoading}
             className="w-full h-12 text-base font-medium transition-default glow-accent hover:glow-accent-strong"
           >
             {isLoading ? (
-              <span className="animate-pulse-glow">Authenticating...</span>
+              <span className="animate-pulse-glow">Connecting...</span>
             ) : (
               <>
-                Enter Platform
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <Github className="mr-2 h-5 w-5" />
+                Sign in with GitHub
               </>
             )}
           </Button>
 
           <p className="text-center text-xs text-muted-foreground">
-            Simulated authentication · GitHub OAuth placeholder
+            Connects to your GitHub repositories · Scopes: repo, read:user
           </p>
         </div>
       </div>

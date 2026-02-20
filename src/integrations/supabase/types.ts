@@ -205,18 +205,24 @@ export type Database = {
         Row: {
           avatar_url: string | null
           created_at: string
+          github_id: string | null
+          github_token: string | null
           id: string
           name: string
         }
         Insert: {
           avatar_url?: string | null
           created_at?: string
+          github_id?: string | null
+          github_token?: string | null
           id?: string
           name: string
         }
         Update: {
           avatar_url?: string | null
           created_at?: string
+          github_id?: string | null
+          github_token?: string | null
           id?: string
           name?: string
         }

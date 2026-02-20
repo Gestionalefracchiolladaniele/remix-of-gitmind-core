@@ -1,18 +1,17 @@
-import { supabase } from '@/integrations/supabase/client';
-import type { Session, SessionState, Repository } from './types';
+import type { Session, SessionState, Repository, User, GitHubRepo, FileNode, IntentResult, DiffValidation, CommitResult, AutonomousSpec } from './types';
 
-const EDGE_URL = `https://agtwmliibgwoaqzpdzoo.supabase.co/functions/v1`;
+const PROJECT_ID = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+const ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const EDGE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1`;
 
-async function callEdge<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch(`${EDGE_URL}${path}`, {
+async function callEdge<T>(fn: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${EDGE_URL}/${fn}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${session?.access_token ?? ''}`,
-      'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      'apikey': ANON_KEY,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -22,38 +21,76 @@ async function callEdge<T>(path: string, body?: Record<string, unknown>): Promis
 }
 
 export const api = {
-  // Session
-  createSession: (repoId: string, mode: 'chat' | 'action') =>
-    callEdge<{ session: Session }>('/gitmind-api', { action: 'session.create', repoId, mode }),
-  
+  // ===== AUTH =====
+  getAuthUrl: (redirectUri: string) =>
+    callEdge<{ url: string; state: string }>('github-auth', { action: 'get_auth_url', redirectUri }),
+
+  authCallback: (code: string) =>
+    callEdge<{ user: User }>('github-auth', { action: 'callback', code }),
+
+  verifyUser: (userId: string) =>
+    callEdge<{ user: User }>('github-auth', { action: 'verify', userId }),
+
+  // ===== SESSION =====
+  createSession: (repoId: string, mode: 'chat' | 'action' | 'autonomous') =>
+    callEdge<{ session: Session }>('gitmind-api', { action: 'session.create', repoId, mode }),
+
   getSession: (sessionId: string) =>
-    callEdge<{ session: Session }>('/gitmind-api', { action: 'session.get', sessionId }),
+    callEdge<{ session: Session }>('gitmind-api', { action: 'session.get', sessionId }),
 
-  // Repository
-  attachRepo: (owner: string, name: string) =>
-    callEdge<{ repository: Repository }>('/gitmind-api', { action: 'repo.attach', owner, name }),
-
-  selectFiles: (sessionId: string, paths: string[]) =>
-    callEdge<{ files: { path: string; content: string }[] }>('/gitmind-api', { action: 'repo.selectFiles', sessionId, paths }),
-
-  // AI Orchestration
-  normalizeIntent: (sessionId: string, input: string) =>
-    callEdge<{ intentType: string; confidence: number }>('/gitmind-api', { action: 'ai.normalize', sessionId, input }),
-
-  compileTask: (sessionId: string, intentType: string) =>
-    callEdge<{ task: Record<string, unknown> }>('/gitmind-api', { action: 'ai.compile', sessionId, intentType }),
-
-  executeAi: (sessionId: string, taskId: string) =>
-    callEdge<{ patches: string[] }>('/gitmind-api', { action: 'ai.execute', sessionId, taskId }),
-
-  // Diff & Commit
-  validateDiff: (patch: string) =>
-    callEdge<{ valid: boolean; errors: string[] }>('/gitmind-api', { action: 'diff.validate', patch }),
-
-  simulateCommit: (sessionId: string, patches: string[]) =>
-    callEdge<{ commitHash: string; message: string }>('/gitmind-api', { action: 'commit.simulate', sessionId, patches }),
-
-  // State transitions
   transitionState: (sessionId: string, newState: SessionState) =>
-    callEdge<{ session: Session }>('/gitmind-api', { action: 'session.transition', sessionId, newState }),
+    callEdge<{ session: Session }>('gitmind-api', { action: 'session.transition', sessionId, newState }),
+
+  // ===== REPOSITORY =====
+  attachRepo: (userId: string, owner: string, name: string) =>
+    callEdge<{ repository: Repository }>('gitmind-api', { action: 'repo.attach', userId, owner, name }),
+
+  listRepos: (userId: string) =>
+    callEdge<{ repositories: Repository[] }>('gitmind-api', { action: 'repo.list', userId }),
+
+  deleteRepo: (repoId: string, userId: string) =>
+    callEdge<{ success: boolean }>('gitmind-api', { action: 'repo.delete', repoId, userId }),
+
+  // ===== GITHUB =====
+  fetchTree: (userId: string, owner: string, name: string, branch?: string, basePath?: string) =>
+    callEdge<{ files: { path: string; size: number; sha: string }[]; truncated: boolean }>('gitmind-api', {
+      action: 'github.fetchTree', userId, owner, name, branch, basePath,
+    }),
+
+  fetchFile: (userId: string, owner: string, name: string, path: string) =>
+    callEdge<{ path: string; content: string; sha: string; size: number }>('gitmind-api', {
+      action: 'github.fetchFile', userId, owner, name, path,
+    }),
+
+  commitFile: (params: { userId: string; owner: string; name: string; path: string; content: string; message: string; sha: string; branch?: string; sessionId?: string }) =>
+    callEdge<CommitResult>('gitmind-api', { action: 'github.commitFile', ...params }),
+
+  listGitHubRepos: (userId: string) =>
+    callEdge<{ repos: GitHubRepo[] }>('gitmind-api', { action: 'github.listUserRepos', userId }),
+
+  // ===== AI =====
+  aiChat: (messages: { role: string; content: string }[], fileContext?: string) =>
+    callEdge<{ reply: string }>('ai-chat', { messages, fileContext }),
+
+  normalizeIntent: (input: string) =>
+    callEdge<IntentResult>('ai-execute', { action: 'normalize', input }),
+
+  compileTask: (sessionId: string, intentType: string, files: string[], basePath?: string) =>
+    callEdge<{ task: Record<string, unknown> }>('ai-execute', { action: 'compile', sessionId, intentType, files, basePath }),
+
+  executeAi: (params: { sessionId: string; intentType: string; files: { path: string; content: string }[]; userPrompt: string }) =>
+    callEdge<{ patches: string; commitMessage: string; retries: number }>('ai-execute', { action: 'execute', ...params }),
+
+  validateDiff: (patch: string, allowedFiles?: string[], basePath?: string) =>
+    callEdge<DiffValidation>('ai-execute', { action: 'validate', patch, allowedFiles, basePath }),
+
+  // ===== AUTONOMOUS =====
+  saveSpec: (sessionId: string, specJson: Record<string, unknown>) =>
+    callEdge<{ spec: AutonomousSpec }>('gitmind-api', { action: 'autonomous.saveSpec', sessionId, specJson }),
+
+  lockSpec: (specId: string) =>
+    callEdge<{ spec: AutonomousSpec }>('gitmind-api', { action: 'autonomous.lockSpec', specId }),
+
+  getSpec: (sessionId: string) =>
+    callEdge<{ spec: AutonomousSpec }>('gitmind-api', { action: 'autonomous.getSpec', sessionId }),
 };
