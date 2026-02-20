@@ -14,6 +14,44 @@ export type Database = {
   }
   public: {
     Tables: {
+      activity_logs: {
+        Row: {
+          action: string
+          created_at: string
+          duration_ms: number | null
+          error_type: string | null
+          id: string
+          retry_count: number | null
+          session_id: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          duration_ms?: number | null
+          error_type?: string | null
+          id?: string
+          retry_count?: number | null
+          session_id?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          duration_ms?: number | null
+          error_type?: string | null
+          id?: string
+          retry_count?: number | null
+          session_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activity_logs_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_tasks: {
         Row: {
           compiled_prompt_hash: string | null
@@ -21,6 +59,7 @@ export type Database = {
           id: string
           intent_type: string
           result: Json | null
+          retry_count: number
           session_id: string
           status: Database["public"]["Enums"]["ai_task_status"]
         }
@@ -30,6 +69,7 @@ export type Database = {
           id?: string
           intent_type: string
           result?: Json | null
+          retry_count?: number
           session_id: string
           status?: Database["public"]["Enums"]["ai_task_status"]
         }
@@ -39,6 +79,7 @@ export type Database = {
           id?: string
           intent_type?: string
           result?: Json | null
+          retry_count?: number
           session_id?: string
           status?: Database["public"]["Enums"]["ai_task_status"]
         }
@@ -52,11 +93,44 @@ export type Database = {
           },
         ]
       }
+      autonomous_specs: {
+        Row: {
+          created_at: string
+          id: string
+          locked_at: string | null
+          session_id: string
+          spec_json: Json
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          locked_at?: string | null
+          session_id: string
+          spec_json?: Json
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          locked_at?: string | null
+          session_id?: string
+          spec_json?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "autonomous_specs_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       repositories: {
         Row: {
           base_path: string | null
           created_at: string
           default_branch: string
+          github_repo_id: string | null
           id: string
           name: string
           owner: string
@@ -66,6 +140,7 @@ export type Database = {
           base_path?: string | null
           created_at?: string
           default_branch?: string
+          github_repo_id?: string | null
           id?: string
           name: string
           owner: string
@@ -75,6 +150,7 @@ export type Database = {
           base_path?: string | null
           created_at?: string
           default_branch?: string
+          github_repo_id?: string | null
           id?: string
           name?: string
           owner?: string
@@ -155,8 +231,15 @@ export type Database = {
     }
     Enums: {
       ai_task_status: "pending" | "running" | "completed" | "failed"
-      session_mode: "chat" | "action"
-      session_state: "IDLE" | "PLANNING" | "EXECUTING" | "DONE" | "FAILED"
+      session_mode: "chat" | "action" | "autonomous"
+      session_state:
+        | "IDLE"
+        | "PLANNING"
+        | "EXECUTING"
+        | "DONE"
+        | "FAILED"
+        | "SPEC_LOCKED"
+        | "VALIDATING"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -285,8 +368,16 @@ export const Constants = {
   public: {
     Enums: {
       ai_task_status: ["pending", "running", "completed", "failed"],
-      session_mode: ["chat", "action"],
-      session_state: ["IDLE", "PLANNING", "EXECUTING", "DONE", "FAILED"],
+      session_mode: ["chat", "action", "autonomous"],
+      session_state: [
+        "IDLE",
+        "PLANNING",
+        "EXECUTING",
+        "DONE",
+        "FAILED",
+        "SPEC_LOCKED",
+        "VALIDATING",
+      ],
     },
   },
 } as const
