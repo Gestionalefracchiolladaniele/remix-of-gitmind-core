@@ -1,21 +1,18 @@
-import { useState } from 'react';
 import { X, FileCode2 } from 'lucide-react';
-import { MOCK_FILE_CONTENTS } from '@/lib/mock-data';
 
 interface CodeViewerProps {
   openFiles: string[];
   activeFile: string | null;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
+  fileContents: Record<string, string>;
 }
 
-const CodeViewer = ({ openFiles, activeFile, onSelectTab, onCloseTab }: CodeViewerProps) => {
-  const content = activeFile ? MOCK_FILE_CONTENTS[activeFile] : null;
-  const fileName = activeFile?.split('/').pop() || '';
+const CodeViewer = ({ openFiles, activeFile, onSelectTab, onCloseTab, fileContents }: CodeViewerProps) => {
+  const content = activeFile ? fileContents[activeFile] : null;
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Tabs */}
       {openFiles.length > 0 && (
         <div className="flex border-b border-border bg-card/50 overflow-x-auto scrollbar-thin">
           {openFiles.map(path => {
@@ -45,7 +42,6 @@ const CodeViewer = ({ openFiles, activeFile, onSelectTab, onCloseTab }: CodeView
         </div>
       )}
 
-      {/* Content */}
       <div className="flex-1 overflow-auto scrollbar-thin">
         {content ? (
           <div className="p-4">
@@ -62,6 +58,10 @@ const CodeViewer = ({ openFiles, activeFile, onSelectTab, onCloseTab }: CodeView
               </code>
             </pre>
           </div>
+        ) : activeFile ? (
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            <p className="text-sm animate-pulse">Loading file...</p>
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             <div className="text-center">
@@ -75,9 +75,7 @@ const CodeViewer = ({ openFiles, activeFile, onSelectTab, onCloseTab }: CodeView
   );
 };
 
-// Simple syntax highlighting
 function highlightLine(line: string): React.ReactNode {
-  // Keywords
   const highlighted = line
     .replace(/(import|export|from|const|let|var|function|return|if|else|interface|type|async|await|new|class|extends|default)\b/g, '⟨KW⟩$1⟨/KW⟩')
     .replace(/(string|number|boolean|void|null|undefined|true|false)\b/g, '⟨TY⟩$1⟨/TY⟩')
