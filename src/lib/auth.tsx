@@ -19,6 +19,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const storedUserId = localStorage.getItem('gitmind_user_id');
     if (storedUserId) {
+      // Check for simulated user first
+      const storedUser = localStorage.getItem('gitmind_user');
+      if (storedUser) {
+        try {
+          setUser(JSON.parse(storedUser));
+        } catch { /* ignore */ }
+        setIsLoading(false);
+        return;
+      }
       api.verifyUser(storedUserId)
         .then(({ user }) => setUser(user))
         .catch(() => localStorage.removeItem('gitmind_user_id'))

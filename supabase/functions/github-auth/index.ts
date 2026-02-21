@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, code, redirectUri } = await req.json();
+    const { action, code, redirectUri, userId: verifyUserId } = await req.json();
     const clientId = Deno.env.get("GITHUB_CLIENT_ID");
     const clientSecret = Deno.env.get("GITHUB_CLIENT_SECRET");
 
@@ -104,20 +104,16 @@ serve(async (req) => {
 
     // Verify session
     if (action === "verify") {
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-      const { userId } = await req.json().catch(() => ({ userId: null }));
-      // Re-parse since we already consumed the body
-      const body = JSON.parse(await req.text().catch(() => "{}"));
-      
-      if (!body.userId) {
+      if (!verifyUserId) {
         return new Response(JSON.stringify({ error: "Missing userId" }), {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const { data: user } = await supabase.from("users").select("id, name, avatar_url, github_id").eq("id", body.userId).single();
+      const supabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+      );
+      const { data: user } = await supabase.from("users").select("id, name, avatar_url, github_id").eq("id", verifyUserId).single();
       if (!user) {
         return new Response(JSON.stringify({ error: "User not found" }), {
           status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
