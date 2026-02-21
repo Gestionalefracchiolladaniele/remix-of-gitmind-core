@@ -84,6 +84,16 @@ export const api = {
   validateDiff: (patch: string, allowedFiles?: string[], basePath?: string) =>
     callEdge<DiffValidation>('ai-execute', { action: 'validate', patch, allowedFiles, basePath }),
 
+  // ===== CHAT MESSAGES =====
+  saveChatMessage: (sessionId: string, role: string, content: string, fileContext?: Record<string, string>) =>
+    callEdge<{ message: { id: string; session_id: string; role: string; content: string; file_context: Record<string, string> | null; created_at: string } }>('gitmind-api', { action: 'chat.saveMessage', sessionId, role, content, fileContext }),
+
+  getChatMessages: (sessionId: string) =>
+    callEdge<{ messages: { id: string; session_id: string; role: string; content: string; file_context: Record<string, string> | null; created_at: string }[] }>('gitmind-api', { action: 'chat.getMessages', sessionId }),
+
+  revertToMessage: (sessionId: string, messageId: string) =>
+    callEdge<{ messages: { id: string; session_id: string; role: string; content: string; file_context: Record<string, string> | null; created_at: string }[] }>('gitmind-api', { action: 'chat.revertToMessage', sessionId, messageId }),
+
   // ===== AUTONOMOUS =====
   saveSpec: (sessionId: string, specJson: Record<string, unknown>) =>
     callEdge<{ spec: AutonomousSpec }>('gitmind-api', { action: 'autonomous.saveSpec', sessionId, specJson }),

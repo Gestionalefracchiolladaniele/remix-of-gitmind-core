@@ -283,6 +283,44 @@ serve(async (req) => {
         break;
       }
 
+      // ===== CHAT MESSAGES =====
+      case "chat.saveMessage": {
+        const { sessionId, role, content, fileContext } = body;
+        const { data, error } = await supabase.from("chat_messages").insert({
+          session_id: sessionId, role, content, file_context: fileContext || null,
+        }).select().single();
+        if (error) throw error;
+        result = { message: data };
+        break;
+      }
+
+      case "chat.getMessages": {
+        const { sessionId } = body;
+        const { data, error } = await supabase.from("chat_messages")
+          .select().eq("session_id", sessionId).order("created_at", { ascending: true });
+        if (error) throw error;
+        result = { messages: data || [] };
+        break;
+      }
+
+      case "chat.revertToMessage": {
+        const { sessionId, messageId } = body;
+        // Get the target message's created_at
+        const { data: target, error: tErr } = await supabase.from("chat_messages")
+          .select("created_at").eq("id", messageId).single();
+        if (tErr) throw tErr;
+        // Delete all messages after this one
+        const { error: dErr } = await supabase.from("chat_messages")
+          .delete().eq("session_id", sessionId).gt("created_at", target.created_at);
+        if (dErr) throw dErr;
+        // Return remaining messages
+        const { data: remaining, error: rErr } = await supabase.from("chat_messages")
+          .select().eq("session_id", sessionId).order("created_at", { ascending: true });
+        if (rErr) throw rErr;
+        result = { messages: remaining || [] };
+        break;
+      }
+
       // ===== AUTONOMOUS MODE =====
       case "autonomous.saveSpec": {
         const { sessionId, specJson } = body;

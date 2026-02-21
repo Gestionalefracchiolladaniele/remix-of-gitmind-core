@@ -1,10 +1,21 @@
-import { useState } from 'react';
-import { Send, Zap, MessageSquare, Play, Loader2, Bot, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Send, Zap, MessageSquare, Play, Loader2, Bot, CheckCircle, AlertTriangle, RotateCcw, FileCode } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api } from '@/lib/api';
-import type { ChatMessage, SessionState, Session, Repository } from '@/lib/types';
+import type { SessionState, Session, Repository } from '@/lib/types';
+
+interface DbMessage {
+  id: string;
+  session_id: string;
+  role: string;
+  content: string;
+  file_context: Record<string, string> | null;
+  created_at: string;
+}
 
 interface AiPanelProps {
   sessionState: SessionState;
@@ -17,48 +28,100 @@ interface AiPanelProps {
 }
 
 const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles, fileContents }: AiPanelProps) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: '1', role: 'assistant', content: 'Welcome to GitMind AI. Ask me about your codebase or describe a code change to execute.', timestamp: new Date() },
-  ]);
+  const [messages, setMessages] = useState<DbMessage[]>([]);
   const [input, setInput] = useState('');
   const [actionInput, setActionInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [executionResult, setExecutionResult] = useState<{ patches: string; commitMessage: string } | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load chat history on session change
+  useEffect(() => {
+    if (!session) return;
+    setLoadingHistory(true);
+    api.getChatMessages(session.id)
+      .then(({ messages: msgs }) => {
+        if (msgs.length === 0) {
+          // Add welcome message
+          const welcomeContent = 'Benvenuto in GitMind AI. Ho accesso ai file aperti nel tuo repository. Chiedimi di analizzare il codice o descrivimi una modifica da eseguire.';
+          api.saveChatMessage(session.id, 'assistant', welcomeContent).then(({ message }) => {
+            setMessages([message]);
+          });
+        } else {
+          setMessages(msgs);
+        }
+      })
+      .catch(console.error)
+      .finally(() => setLoadingHistory(false));
+  }, [session?.id]);
+
+  // Auto-scroll
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, isChatting]);
+
+  // Build file context string
+  const buildFileContext = () => {
+    const ctx = openFiles
+      .filter(f => fileContents[f])
+      .map(f => `--- ${f} ---\n${fileContents[f]}`)
+      .join('\n\n');
+    return ctx || undefined;
+  };
+
+  // Build file context snapshot for DB storage
+  const buildFileSnapshot = (): Record<string, string> | undefined => {
+    const snapshot: Record<string, string> = {};
+    openFiles.forEach(f => {
+      if (fileContents[f]) snapshot[f] = fileContents[f];
+    });
+    return Object.keys(snapshot).length > 0 ? snapshot : undefined;
+  };
 
   // --- AI Chat ---
   const handleSendChat = async () => {
-    if (!input.trim() || isChatting) return;
-    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input, timestamp: new Date() };
-    setMessages(prev => [...prev, userMsg]);
+    if (!input.trim() || isChatting || !session) return;
+    const userContent = input;
     setInput('');
     setIsChatting(true);
 
     try {
-      // Build file context from open files
-      const fileCtx = openFiles
-        .filter(f => fileContents[f])
-        .map(f => `--- ${f} ---\n${fileContents[f]}`)
-        .join('\n\n');
+      // Save user message to DB
+      const fileSnapshot = buildFileSnapshot();
+      const { message: savedUserMsg } = await api.saveChatMessage(session.id, 'user', userContent, fileSnapshot);
+      setMessages(prev => [...prev, savedUserMsg]);
 
-      const chatMessages = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }));
-      const { reply } = await api.aiChat(chatMessages, fileCtx || undefined);
+      // Build chat history for AI
+      const allMsgs = [...messages, savedUserMsg];
+      const chatMessages = allMsgs.map(m => ({ role: m.role, content: m.content }));
+      const fileCtx = buildFileContext();
 
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: reply,
-        timestamp: new Date(),
-      }]);
+      const { reply } = await api.aiChat(chatMessages, fileCtx);
+
+      // Save assistant message
+      const { message: savedAssistantMsg } = await api.saveChatMessage(session.id, 'assistant', reply);
+      setMessages(prev => [...prev, savedAssistantMsg]);
     } catch (e: any) {
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `Error: ${e.message}`,
-        timestamp: new Date(),
-      }]);
+      const errContent = `Errore: ${e.message}`;
+      if (session) {
+        const { message: errMsg } = await api.saveChatMessage(session.id, 'assistant', errContent);
+        setMessages(prev => [...prev, errMsg]);
+      }
     } finally {
       setIsChatting(false);
+    }
+  };
+
+  // --- Revert to message ---
+  const handleRevert = async (messageId: string) => {
+    if (!session) return;
+    try {
+      const { messages: reverted } = await api.revertToMessage(session.id, messageId);
+      setMessages(reverted);
+    } catch (e: any) {
+      console.error('Revert failed:', e);
     }
   };
 
@@ -69,20 +132,17 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
     setExecutionResult(null);
 
     try {
-      // Step 1: Normalize intent
       onStateChange('PLANNING');
       const intent = await api.normalizeIntent(actionInput);
 
-      // Step 2: Compile task with open files
       const filesToSend = openFiles
         .filter(f => fileContents[f])
         .map(f => ({ path: f, content: fileContents[f] }));
 
       if (filesToSend.length === 0) {
-        throw new Error('Open at least one file before executing an action.');
+        throw new Error('Apri almeno un file prima di eseguire un\'azione.');
       }
 
-      // Step 3: Execute AI
       onStateChange('EXECUTING');
       const result = await api.executeAi({
         sessionId: session.id,
@@ -91,24 +151,21 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
         userPrompt: actionInput,
       });
 
-      // Step 4: Validate
       onStateChange('VALIDATING');
       const validation = await api.validateDiff(result.patches, filesToSend.map(f => f.path), repo.base_path || undefined);
 
       if (!validation.valid) {
-        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
+        throw new Error(`Validazione fallita: ${validation.errors.join(', ')}`);
       }
 
       setExecutionResult(result);
       onStateChange('DONE');
       setActionInput('');
     } catch (e: any) {
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `Action failed: ${e.message}`,
-        timestamp: new Date(),
-      }]);
+      if (session) {
+        const { message: errMsg } = await api.saveChatMessage(session.id, 'assistant', `Azione fallita: ${e.message}`);
+        setMessages(prev => [...prev, errMsg]);
+      }
       onStateChange('FAILED');
     } finally {
       setIsProcessing(false);
@@ -133,37 +190,83 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
 
         {/* Chat Tab */}
         <TabsContent value="chat" className="flex-1 flex flex-col mt-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
-            {messages.map(msg => (
-              <div key={msg.id} className={`animate-fade-in ${msg.role === 'user' ? 'ml-6' : 'mr-6'}`}>
-                <div className={`rounded-lg p-3 text-xs leading-relaxed ${
-                  msg.role === 'user' ? 'bg-primary/10 text-foreground' : 'bg-secondary/50 text-foreground'
-                }`}>
-                  {msg.role === 'assistant' && <Bot className="inline h-3 w-3 mr-1 text-primary" />}
-                  <pre className="whitespace-pre-wrap font-mono">{msg.content}</pre>
-                </div>
+          <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
+            {loadingHistory ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <span className="ml-2 text-xs text-muted-foreground">Caricamento cronologia...</span>
               </div>
-            ))}
+            ) : (
+              messages.map((msg, idx) => (
+                <div key={msg.id} className={`group animate-fade-in ${msg.role === 'user' ? 'ml-6' : 'mr-6'}`}>
+                  <div className={`rounded-lg p-3 text-xs leading-relaxed ${
+                    msg.role === 'user' ? 'bg-primary/10 text-foreground' : 'bg-secondary/50 text-foreground'
+                  }`}>
+                    {msg.role === 'assistant' && <Bot className="inline h-3 w-3 mr-1 text-primary" />}
+                    <div className="prose prose-sm prose-invert max-w-none text-xs">
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    </div>
+                    {/* File context indicator */}
+                    {msg.file_context && Object.keys(msg.file_context).length > 0 && (
+                      <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <FileCode className="h-2.5 w-2.5" />
+                        <span>{Object.keys(msg.file_context).length} file nel contesto</span>
+                      </div>
+                    )}
+                  </div>
+                  {/* Revert button - show on hover for assistant messages (not first) */}
+                  {msg.role === 'assistant' && idx > 0 && (
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex justify-end">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1.5 text-[10px] text-muted-foreground hover:text-destructive"
+                            onClick={() => handleRevert(msg.id)}
+                          >
+                            <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
+                            Ripristina qui
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="left" className="text-xs">
+                          Elimina tutti i messaggi successivi e torna a questo punto
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
             {isChatting && (
               <div className="mr-6 animate-fade-in">
                 <div className="rounded-lg bg-secondary/50 p-3 text-xs">
                   <Loader2 className="h-3 w-3 animate-spin text-primary inline mr-1" />
-                  <span className="text-muted-foreground">Thinking...</span>
+                  <span className="text-muted-foreground">Sto pensando...</span>
                 </div>
               </div>
             )}
           </div>
+
+          {/* Open files indicator */}
+          {openFiles.length > 0 && (
+            <div className="border-t border-border px-3 py-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+              <FileCode className="h-3 w-3" />
+              <span>{openFiles.length} file aperti come contesto</span>
+            </div>
+          )}
+
           <div className="border-t border-border p-3">
             <div className="flex gap-2">
               <Input
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleSendChat()}
-                placeholder="Ask about this codebase..."
+                placeholder="Chiedi del codice..."
                 className="h-9 text-xs bg-secondary/50"
-                disabled={isChatting}
+                disabled={isChatting || !session}
               />
-              <Button size="sm" onClick={handleSendChat} className="h-9 px-3" disabled={isChatting}>
+              <Button size="sm" onClick={handleSendChat} className="h-9 px-3" disabled={isChatting || !session}>
                 {isChatting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               </Button>
             </div>
@@ -173,10 +276,9 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
         {/* Action Tab */}
         <TabsContent value="action" className="flex-1 flex flex-col mt-0 overflow-hidden">
           <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-4">
-            {/* State indicator */}
             <div className="glass-panel rounded-lg p-3">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-muted-foreground">Session State</span>
+                <span className="text-xs font-medium text-muted-foreground">Stato Sessione</span>
                 <StateIndicator state={sessionState} />
               </div>
               <div className="flex gap-1.5">
@@ -189,33 +291,30 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
               </div>
             </div>
 
-            {/* Pipeline info */}
             <div className="rounded-lg bg-secondary/30 p-3 text-xs text-muted-foreground space-y-2">
-              <p className="font-medium text-foreground">AI Action Pipeline</p>
+              <p className="font-medium text-foreground">Pipeline AI Action</p>
               <ol className="list-decimal list-inside space-y-1">
-                <li className={sessionState === 'PLANNING' ? 'text-primary font-medium' : ''}>Normalize intent (deterministic)</li>
-                <li className={sessionState === 'EXECUTING' ? 'text-primary font-medium' : ''}>AI generate patches (Gemini Flash)</li>
-                <li className={sessionState === 'VALIDATING' ? 'text-primary font-medium' : ''}>Validate diffs & security</li>
+                <li className={sessionState === 'PLANNING' ? 'text-primary font-medium' : ''}>Normalizza intent</li>
+                <li className={sessionState === 'EXECUTING' ? 'text-primary font-medium' : ''}>Genera patch (Gemini Flash)</li>
+                <li className={sessionState === 'VALIDATING' ? 'text-primary font-medium' : ''}>Valida diff & sicurezza</li>
                 <li className={sessionState === 'DONE' ? 'text-primary font-medium' : ''}>Review & commit</li>
               </ol>
             </div>
 
-            {/* Open files context */}
             {openFiles.length > 0 && (
               <div className="rounded-lg bg-secondary/30 p-3 text-xs">
-                <p className="text-muted-foreground mb-1.5">Context ({openFiles.length} files):</p>
+                <p className="text-muted-foreground mb-1.5">Contesto ({openFiles.length} file):</p>
                 {openFiles.map(f => (
                   <p key={f} className="font-mono text-foreground/70 truncate">{f}</p>
                 ))}
               </div>
             )}
 
-            {/* Execution result */}
             {executionResult && (
               <div className="animate-slide-in-right rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
                 <div className="flex items-center gap-1.5">
                   <CheckCircle className="h-3.5 w-3.5 text-primary" />
-                  <p className="text-xs font-medium text-primary">Execution Complete</p>
+                  <p className="text-xs font-medium text-primary">Esecuzione Completata</p>
                 </div>
                 <p className="text-xs text-muted-foreground font-mono">{executionResult.commitMessage}</p>
                 <pre className="text-[10px] text-foreground/60 font-mono whitespace-pre-wrap max-h-40 overflow-y-auto bg-background/50 rounded p-2">
@@ -228,10 +327,10 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
               <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
                 <div className="flex items-center gap-1.5">
                   <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-                  <p className="text-xs font-medium text-destructive">Execution Failed</p>
+                  <p className="text-xs font-medium text-destructive">Esecuzione Fallita</p>
                 </div>
                 <Button variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => onStateChange('IDLE')}>
-                  Reset to IDLE
+                  Reset
                 </Button>
               </div>
             )}
@@ -243,7 +342,7 @@ const AiPanel = ({ sessionState, onStateChange, session, repo, userId, openFiles
                 value={actionInput}
                 onChange={e => setActionInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleExecuteAction()}
-                placeholder="Describe code change..."
+                placeholder="Descrivi la modifica..."
                 className="h-9 text-xs bg-secondary/50"
                 disabled={isProcessing}
               />
