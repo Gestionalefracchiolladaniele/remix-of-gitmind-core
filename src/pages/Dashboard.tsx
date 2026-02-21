@@ -40,6 +40,11 @@ const Dashboard = () => {
 
   const loadGitHubRepos = async () => {
     if (!user) return;
+    if (!user.github_id) {
+      // Simulated user - no real GitHub connection
+      setGhRepos([]);
+      return;
+    }
     setGhLoading(true);
     try {
       const { repos } = await api.listGitHubRepos(user.id);
