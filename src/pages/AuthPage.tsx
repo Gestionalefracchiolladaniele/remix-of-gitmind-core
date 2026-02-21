@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GitBranch, Zap, Shield, ArrowRight, Github } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,11 +9,9 @@ const AuthPage = () => {
   const { user, login, isLoading: authLoading } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
 
-  // If already logged in, redirect
-  if (user) {
-    navigate('/dashboard');
-    return null;
-  }
+  useEffect(() => {
+    if (user) navigate('/dashboard');
+  }, [user, navigate]);
 
   const handleLogin = async () => {
     setIsLoading(true);

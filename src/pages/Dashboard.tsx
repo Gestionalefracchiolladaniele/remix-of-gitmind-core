@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useAuth } from '@/lib/auth';
+import { Loader2 as Spinner } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Repository, GitHubRepo } from '@/lib/types';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, isLoading: authLoading, logout } = useAuth();
   const [repos, setRepos] = useState<Repository[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAttach, setShowAttach] = useState(false);
@@ -20,9 +21,10 @@ const Dashboard = () => {
   const [attaching, setAttaching] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!user) { navigate('/'); return; }
     loadRepos();
-  }, [user, navigate]);
+  }, [user, authLoading, navigate]);
 
   const loadRepos = async () => {
     if (!user) return;
